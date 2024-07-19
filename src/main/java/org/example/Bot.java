@@ -39,7 +39,7 @@ public class Bot {
     }
 
     public void run() {
-        JDABuilder.create(properties.getProperty("token"), INTENTS).addEventListeners(new LmsEventListener()).build();
+        JDABuilder.create(properties.getProperty("token"), INTENTS).addEventListeners(new ChannelEventListener()).build();
         openApplicationWindow();
     }
 

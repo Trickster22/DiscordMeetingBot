@@ -18,9 +18,9 @@ import java.util.stream.Collectors;
  * @author Михаил Александров
  * @since 18.05.2024
  */
-public class LmsEventListener extends ListenerAdapter {
-    public static final String GREETINGS = "Всем привет! Начинаем очередь:\n";
-    public static final String BYE = "Очередь завершена. Всем пока!";
+public class ChannelEventListener extends ListenerAdapter {
+    private static final String GREETINGS = "Всем привет! Начинаем очередь:\n";
+    private static final String BYE = "Очередь завершена. Всем пока!";
     private static final String MAIN_VOICE_CHANNEL_NAME = "Основной";
     private static final long MAIN_VOICE_CHANNEL_ID = 1154392230660952078L;
     private static final String NEXT_BUTTON_ID = "nextbtn";
