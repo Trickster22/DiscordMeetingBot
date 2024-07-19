@@ -24,6 +24,7 @@ public class ChannelEventListener extends ListenerAdapter {
     private static final String MAIN_VOICE_CHANNEL_NAME = "Основной";
     private static final long MAIN_VOICE_CHANNEL_ID = 1154392230660952078L;
     private static final String NEXT_BUTTON_ID = "nextbtn";
+    public static final String ADMIN_ROLE_ID = "1154393235851063358";
     private final StringBuilder randomMessageBuilder = new StringBuilder(GREETINGS);
     private List<String> joinedMemberList;
 
@@ -48,7 +49,7 @@ public class ChannelEventListener extends ListenerAdapter {
                     random(event);
                     break;
                 case ">kill":
-                    kill(channel);
+                    kill(event);
                 default:
                     channel.sendMessage("Я такой команды не знаю").queue();
             }
@@ -109,8 +110,21 @@ public class ChannelEventListener extends ListenerAdapter {
         channel.sendMessage("Понг!").queue();
     }
 
-    private void kill(MessageChannel channel) {
-        channel.sendMessage("Зачем же ты меня убил...").queue();
-        System.exit(0);
+    private void kill(MessageReceivedEvent event) {
+        Member member = event.getMember();
+        MessageChannel channel = event.getChannel();
+        if (member == null) {
+            channel.sendMessage("Произошло что-то непонятное. Попробуйте еще раз").queue();
+            return;
+        }
+        boolean isAdmin = member.getRoles()
+            .stream()
+            .anyMatch(role -> ADMIN_ROLE_ID.equalsIgnoreCase(role.getId()));
+        if (isAdmin) {
+            channel.sendMessage("Зачем же ты меня убил...").queue();
+            System.exit(0);
+        } else {
+            channel.sendMessage("У вас недостаточно прав для выполнения этой команды").queue();
+        }
     }
 }
