@@ -20,7 +20,7 @@ public class Bot {
     /**
      * Путь к файлу с пропертями
      */
-    private static final String PROPERTY_FILE_PATH = "./config.properties";
+    private static final String PROPERTY_FILE_PATH = "src/main/resources/config.properties";
     /**
      * Список прав бота
      */
