@@ -3,13 +3,21 @@ package org.example;
 import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.channel.concrete.VoiceChannel;
 import net.dv8tion.jda.api.entities.channel.middleman.MessageChannel;
+import net.dv8tion.jda.api.entities.channel.unions.AudioChannelUnion;
+import net.dv8tion.jda.api.events.guild.voice.GuildVoiceUpdateEvent;
 import net.dv8tion.jda.api.events.interaction.component.ButtonInteractionEvent;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.interactions.components.buttons.Button;
 import net.dv8tion.jda.api.requests.restaction.interactions.MessageEditCallbackAction;
 
+import java.io.IOException;
 import java.util.*;
+import java.util.Map.Entry;
+import java.util.logging.ConsoleHandler;
+import java.util.logging.FileHandler;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 /**
@@ -19,14 +27,14 @@ import java.util.stream.Collectors;
  * @since 18.05.2024
  */
 public class ChannelEventListener extends ListenerAdapter {
-    private static final String GREETINGS = "Всем привет! Начинаем очередь:\n";
-    private static final String BYE = "Очередь завершена. Всем пока!";
-    private static final String MAIN_VOICE_CHANNEL_NAME = "Основной";
+    private static final Logger LOGGER = Logger.getLogger("ChannelEventListener");
     private static final long MAIN_VOICE_CHANNEL_ID = 1154392230660952078L;
     private static final String NEXT_BUTTON_ID = "nextbtn";
-    public static final String ADMIN_ROLE_ID = "1154393235851063358";
-    private final StringBuilder randomMessageBuilder = new StringBuilder(GREETINGS);
-    private List<String> joinedMemberList;
+    private static final String ADMIN_ROLE_ID = "1154393235851063358";
+    /**
+     * Id сообщения с запуском рандома - информаиця о сессии
+     */
+    private final Map<String, SessionData> messageIdToSessionDataMap = new HashMap<>();
 
     /**
      * реакиця на получение сообщения
@@ -50,6 +58,7 @@ public class ChannelEventListener extends ListenerAdapter {
                     break;
                 case ">kill":
                     kill(event);
+                    break;
                 default:
                     channel.sendMessage("Я такой команды не знаю").queue();
             }
@@ -59,37 +68,38 @@ public class ChannelEventListener extends ListenerAdapter {
     private void random(MessageReceivedEvent event) {
         MessageChannel channel = event.getChannel();
         if (shuffleMembers(event)) {
-            String member = joinedMemberList.remove(0);
-            channel.sendMessage(randomMessageBuilder + String.format("**%s**", member))
-                .addActionRow(Button.success(NEXT_BUTTON_ID, "Следующий"))
+            String messageId = event.getMessageId();
+            SessionData sessionData = messageIdToSessionDataMap.get(messageId);
+            String member = sessionData.getMemberList().remove(0);
+            MessageBuilder messageBuilder = sessionData.getMessageBuilder();
+            channel.sendMessage(messageBuilder + String.format("\n**%s**", member))
+                .addActionRow(Button.success(NEXT_BUTTON_ID + ":" + messageId, "Следующий"))
                 .queue();
-            randomMessageBuilder.append(member);
-            randomMessageBuilder.append("\n");
+            messageBuilder.appendNewLine(member);
         } else {
             channel.sendMessage("В голосовом канале никого нет...").queue();
         }
     }
     @Override
     public void onButtonInteraction(ButtonInteractionEvent event) {
-        if (event.getComponentId().equals(NEXT_BUTTON_ID)) {
-            chooseNextMember(event);
+        String[] buttonId = event.getComponentId().split(":");
+        if (buttonId[0].equals(NEXT_BUTTON_ID)) {
+            chooseNextMember(event, buttonId[1]);
         }
     }
 
-    private void chooseNextMember(ButtonInteractionEvent event) {
-        boolean isMemberListEmpty = joinedMemberList.isEmpty();
-        String member = isMemberListEmpty ? BYE : joinedMemberList.remove(0);
+    private void chooseNextMember(ButtonInteractionEvent event, String messageId) {
+        SessionData sessionData = messageIdToSessionDataMap.get(messageId);
+        MessageBuilder messageBuilder = sessionData.getMessageBuilder();
         MessageEditCallbackAction action = event.deferEdit();
-        if (isMemberListEmpty) {
-            action.setComponents();
-        }
-        action.setContent(randomMessageBuilder + String.format("**%s**", member)).queue();
-        if (!isMemberListEmpty) {
-            randomMessageBuilder.append(member);
-            randomMessageBuilder.append("\n");
+        if (!sessionData.isMemberListEmpty()) {
+            String member = sessionData.getNextMember();
+            action.setContent(messageBuilder + String.format("\n**%s**", member)).queue();
+            messageBuilder.appendNewLine(member);
         } else {
-            randomMessageBuilder.setLength(0);
-            randomMessageBuilder.append(GREETINGS);
+            action.setComponents();
+            action.setContent(messageBuilder.finish()).queue();
+            messageIdToSessionDataMap.remove(messageId);
         }
     }
 
@@ -98,11 +108,13 @@ public class ChannelEventListener extends ListenerAdapter {
         if (channel == null) {
             return false;
         }
-        joinedMemberList = channel.getMembers().stream().map(Member::getEffectiveName).collect(Collectors.toList());
+        List<String> joinedMemberList = channel.getMembers().stream().map(Member::getEffectiveName).collect(Collectors.toList());
         if (joinedMemberList.isEmpty()) {
             return false;
         }
         Collections.shuffle(joinedMemberList);
+        SessionData sessionData = new SessionData(joinedMemberList, event.getMessageId());
+        messageIdToSessionDataMap.put(sessionData.getSessionId(), sessionData);
         return true;
     }
 
@@ -125,6 +137,56 @@ public class ChannelEventListener extends ListenerAdapter {
             System.exit(0);
         } else {
             channel.sendMessage("У вас недостаточно прав для выполнения этой команды").queue();
+        }
+    }
+
+    /**
+     * Действия на изменение статуса голосового канала
+     * Пока заточен только под наличие одного голосового канала
+     */
+    @Override
+    public void onGuildVoiceUpdate(GuildVoiceUpdateEvent event) {
+        AudioChannelUnion joinedChannel = event.getChannelJoined();
+        AudioChannelUnion leftChannel = event.getChannelLeft();
+        String memberName = event.getMember().getEffectiveName();
+        //Пользователь подключился к голосовому каналу
+        if (joinedChannel != null) {
+            addMemberToQueue(memberName);
+        }
+        //Пользователь покинул голосовой канал
+        if (leftChannel != null) {
+            removeMemberFromQueue(memberName);
+        }
+    }
+
+    private void removeMemberFromQueue(String memberName) {
+        LOGGER.info(String.format("Пользователь %s покинул канал", memberName));
+        for (Entry<String, SessionData> entry : messageIdToSessionDataMap.entrySet()) {
+            SessionData sessionData = entry.getValue();
+            sessionData.removeMember(memberName);
+            LOGGER.info(
+                String.format(
+                    "Seesion id = %s, members = %s",
+                    sessionData.getSessionId(),
+                    String.join(", ", sessionData.getMemberList())
+                )
+            );
+        }
+
+    }
+
+    private void addMemberToQueue(String memberName) {
+        LOGGER.info(String.format("Пользователь %s зашел в канал", memberName));
+        for (Entry<String, SessionData> entry : messageIdToSessionDataMap.entrySet()) {
+            SessionData sessionData = entry.getValue();
+            sessionData.addNewMember(memberName);
+            LOGGER.info(
+                String.format(
+                    "Seesion id = %s, members = %s",
+                    sessionData.getSessionId(),
+                    String.join(", ", sessionData.getMemberList())
+                )
+            );
         }
     }
 }

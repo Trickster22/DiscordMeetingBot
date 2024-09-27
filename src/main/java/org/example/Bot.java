@@ -11,7 +11,7 @@ import java.util.EnumSet;
 import java.util.Properties;
 
 /**
- * TODO Class Description
+ * Бот
  *
  * @author Михаил Александров
  * @since 19.07.2024
@@ -20,7 +20,7 @@ public class Bot {
     /**
      * Путь к файлу с пропертями
      */
-    private static final String PROPERTY_FILE_PATH = "src/main/resources/config.properties";
+    private static final String PROPERTY_FILE_PATH = "C:\\MyJavaProjects\\lmsBot\\src\\main\\resources\\config.properties";
     /**
      * Список прав бота
      */
@@ -40,7 +40,7 @@ public class Bot {
 
     public void run() {
         JDABuilder.create(properties.getProperty("token"), INTENTS).addEventListeners(new ChannelEventListener()).build();
-        openApplicationWindow();
+        System.out.println("Бот запущен");
     }
 
     private void initProperties() {
