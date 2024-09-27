@@ -1,9 +1,10 @@
 package org.example;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import net.dv8tion.jda.api.entities.Member;
+
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 /**
  * Информация по сессии
@@ -12,48 +13,114 @@ import java.util.Set;
  * @since 19.09.2024
  */
 public class SessionData {
-    private final List<String> memberList;
-    private final MessageBuilder messageBuilder;
     private final String sessionId;
+    /**
+     * Кто уже говорил
+     */
+    private final List<Member> alreadySpokenMembers = new ArrayList<>();
+    
+    /**
+     * Кого пропустить
+     */
+    private final Set<Member> skipped = new HashSet<>();
+    
+    /**
+     * Очередь "приоритетных" людей - если она не пустая, то берет людей из нее
+     */
+    private final Deque<Member> nextQueue = new ArrayDeque<>();
+    /**
+     * Очередь людей, кто будет повторно выступать в конце
+     */
+    private final Deque<Member> lastQueue = new ArrayDeque<>();
 
-    private final Set<String> alreadySpokenMembers;
-
-    public SessionData(List<String> memberList, String sessionId) {
-        this.memberList = memberList;
-        messageBuilder = new MessageBuilder();
+    public SessionData(String sessionId) {
         this.sessionId = sessionId;
-        alreadySpokenMembers = new HashSet<>();
     }
-
-    public String getNextMember() {
-        String member = memberList.remove(0);
-        alreadySpokenMembers.add(member);
-        return member;
-    }
-
-    public void addNewMember(String member) {
-        if (!alreadySpokenMembers.contains(member)) {
-            memberList.add(member);
+    
+    public class UpdateResult {
+        public final String message;
+        public final boolean isFinal;
+        
+        public UpdateResult(boolean isFinal) {
+            this.message = getMembersMessage(isFinal);
+            this.isFinal = isFinal;
         }
     }
-
-    public void removeMember(String memberToRemove) {
-        memberList.removeIf(member -> member.equals(memberToRemove));
+    
+    /**
+     * Выбрать следующего участника и перегенерировать сообщение
+     * @param currentMembers участники которые сейчас в канале
+     */
+    public UpdateResult update(Set<Member> currentMembers){
+        return getNextMember(currentMembers)
+            .map(nextMember -> {
+                alreadySpokenMembers.add(nextMember);
+                return new UpdateResult(isNoQueueLeft(currentMembers));
+            })
+            .orElseGet(() -> new UpdateResult(true));
     }
-
-    public List<String> getMemberList() {
-        return memberList;
+    
+    private Set<Member> filterSkipped(Set<Member> currentMembers){
+        return currentMembers.stream().filter(member -> !skipped.contains(member)).collect(Collectors.toSet());
     }
-
-    public MessageBuilder getMessageBuilder() {
-        return messageBuilder;
+    
+    private boolean isNoQueueLeft(Set<Member> currentMembers){
+        return nextQueue.isEmpty()
+            && new HashSet<>(alreadySpokenMembers).containsAll(filterSkipped(currentMembers))
+            && lastQueue.isEmpty();
+    }
+    
+    private Optional<Member> getNextMember(Set<Member> currentMembers){
+        if(!nextQueue.isEmpty()){
+            return Optional.of(nextQueue.removeFirst());
+        }
+        List<Member> notSpokenMembers = new ArrayList<>(filterSkipped(currentMembers));
+        notSpokenMembers.removeAll(alreadySpokenMembers);
+        if(!notSpokenMembers.isEmpty()){
+            Collections.shuffle(notSpokenMembers);
+            return Optional.of(notSpokenMembers.get(0));
+        }
+        if(!lastQueue.isEmpty()){
+            return Optional.of(lastQueue.removeFirst());
+        }
+        return Optional.empty();
+    }
+    
+    public String getMembersMessage(boolean isFinishMessage){
+        MessageBuilder messageBuilder = new MessageBuilder();
+        IntStream.range(0, alreadySpokenMembers.size()).forEach(i -> {
+            String memberText = getMemberDisplayText(alreadySpokenMembers.get(i));
+            if(!isFinishMessage && i == alreadySpokenMembers.size() - 1){
+                //Последний жирным
+                messageBuilder.appendBoldNewLine(memberText);
+            } else {
+                messageBuilder.appendNewLine(memberText);
+            }
+        });
+        if(isFinishMessage){
+            messageBuilder.finish();
+        }
+        return messageBuilder.toString();
+    }
+    
+    private String getMemberDisplayText(Member member){
+        //Чтоб можно было легко поменять в будущем
+        return member.getEffectiveName();
     }
 
     public String getSessionId() {
         return sessionId;
     }
-
-    public boolean isMemberListEmpty() {
-        return memberList == null || memberList.isEmpty();
+    
+    public void addToNextQueue(Member member){
+        nextQueue.add(member);
+    }
+    
+    public void addToLastQueue(Member member){
+        lastQueue.add(member);
+    }
+    
+    public void addSkipped(Member member){
+        skipped.add(member);
     }
 }
