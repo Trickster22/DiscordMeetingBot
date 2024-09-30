@@ -3,6 +3,7 @@ package org.example;
 import net.dv8tion.jda.api.entities.Member;
 
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -77,8 +78,8 @@ public class SessionData {
         List<Member> notSpokenMembers = new ArrayList<>(filterSkipped(currentMembers));
         notSpokenMembers.removeAll(alreadySpokenMembers);
         if(!notSpokenMembers.isEmpty()){
-            Collections.shuffle(notSpokenMembers);
-            return Optional.of(notSpokenMembers.get(0));
+            int randomIndex = ThreadLocalRandom.current().nextInt(notSpokenMembers.size());
+            return Optional.of(notSpokenMembers.get(randomIndex));
         }
         if(!lastQueue.isEmpty()){
             return Optional.of(lastQueue.removeFirst());
