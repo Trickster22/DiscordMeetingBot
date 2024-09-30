@@ -1,24 +1,33 @@
 package org.example;
 
+import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Member;
+import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.channel.concrete.VoiceChannel;
 import net.dv8tion.jda.api.entities.channel.middleman.MessageChannel;
 import net.dv8tion.jda.api.entities.channel.unions.AudioChannelUnion;
+import net.dv8tion.jda.api.events.GenericEvent;
 import net.dv8tion.jda.api.events.guild.voice.GuildVoiceUpdateEvent;
 import net.dv8tion.jda.api.events.interaction.component.ButtonInteractionEvent;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
+import net.dv8tion.jda.api.interactions.components.ActionRow;
+import net.dv8tion.jda.api.interactions.components.LayoutComponent;
 import net.dv8tion.jda.api.interactions.components.buttons.Button;
+import net.dv8tion.jda.api.requests.restaction.MessageCreateAction;
 import net.dv8tion.jda.api.requests.restaction.interactions.MessageEditCallbackAction;
 
 import java.io.IOException;
 import java.util.*;
 import java.util.Map.Entry;
+import java.util.function.BiConsumer;
+import java.util.function.Supplier;
 import java.util.logging.ConsoleHandler;
 import java.util.logging.FileHandler;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Слушатель событий в канале
@@ -41,45 +50,91 @@ public class ChannelEventListener extends ListenerAdapter {
      */
     @Override
     public void onMessageReceived(MessageReceivedEvent event) {
-        MessageChannel channel = event.getChannel();
         //Чтоб не реагировал на сообщения ботов
         if (event.getAuthor().isBot()) {
             return;
         }
-
         String message = event.getMessage().getContentRaw();
-        if (message.startsWith(">")) {
-            switch (message) {
-                case ">ping":
-                    ping(channel);
-                    break;
-                case ">r":
-                    random(event);
-                    break;
-                case ">kill":
-                    kill(event);
-                    break;
-                default:
-                    channel.sendMessage("Я такой команды не знаю").queue();
-            }
+        if(!message.startsWith(">")){
+            return;
+        }
+        
+        List<String> commands = Arrays.stream(message.split("(?=>)"))
+            .filter(part -> part.startsWith(">"))
+            .map(String::trim)
+            .collect(Collectors.toList());
+        
+        boolean isKnownCommand = false;
+        for(String command : commands){
+            isKnownCommand = tryDoingCommand(command, event) || isKnownCommand;
+        }
+        
+        if(!isKnownCommand){
+            event.getChannel().sendMessage("Я таких команд не знаю").queue();
+        }
+    }
+    
+    private boolean tryDoingCommand(String message, MessageReceivedEvent event){
+        return Stream.<Supplier<Boolean>>of(
+            () -> tryAddToQueue(message, ">next", SessionData::addToNextQueue, event),
+            () -> tryAddToQueue(message, ">last", SessionData::addToLastQueue, event),
+            () -> tryAddToQueue(message, ">skip", SessionData::addSkipped, event),
+            () -> tryDoingSimpleCommand(message, event)
+        ).anyMatch(Supplier::get);
+    }
+    
+    private boolean tryDoingSimpleCommand(String message, MessageReceivedEvent event){
+        switch (message) {
+            case ">ping":
+                ping(event.getChannel());
+                return true;
+            case ">r":
+                random(event);
+                return true;
+            case ">kill":
+                kill(event);
+                return true;
+            default:
+                return false;
         }
     }
 
     private void random(MessageReceivedEvent event) {
         MessageChannel channel = event.getChannel();
-        if (shuffleMembers(event)) {
+        Set<Member> currentMembers = getCurrentMembers(event.getGuild());
+        if (!currentMembers.isEmpty()) {
             String messageId = event.getMessageId();
-            SessionData sessionData = messageIdToSessionDataMap.get(messageId);
-            String member = sessionData.getMemberList().remove(0);
-            MessageBuilder messageBuilder = sessionData.getMessageBuilder();
-            channel.sendMessage(messageBuilder + String.format("\n**%s**", member))
-                .addActionRow(Button.success(NEXT_BUTTON_ID + ":" + messageId, "Следующий"))
+            SessionData sessionData = new SessionData(messageId);
+            messageIdToSessionDataMap.put(messageId, sessionData);
+
+            channel.sendMessage(sessionData.getMembersMessage(false))
+                .addComponents(getNextMemberButton("Поехали", messageId))
                 .queue();
-            messageBuilder.appendNewLine(member);
+            //Вместо того что выше, можно использовать updateAndSendInitial
         } else {
             channel.sendMessage("В голосовом канале никого нет...").queue();
         }
     }
+    
+    /**
+     * Поведение аналогично тому, что было в боте раньше - сразу же определяется первый человек в очереди
+     * Сейчас это не используется, чтобы позволить в одном сообщении задавать несколько команд сразу, типа
+     * >r >skip Марат
+     */
+    private void updateAndSendInitial(SessionData sessionData, Set<Member> currentMembers, MessageChannel channel){
+            SessionData.UpdateResult updateResult = sessionData.update(currentMembers);
+
+            MessageCreateAction messageCreateAction = channel.sendMessage(updateResult.message);
+            if(!updateResult.isFinal){
+                messageCreateAction.addComponents(getNextMemberButton("Следующий", sessionData.getSessionId()));
+            }
+            messageCreateAction.queue();
+    }
+    
+    private LayoutComponent getNextMemberButton(String caption, String messageId){
+        return ActionRow.of(Button.success(NEXT_BUTTON_ID + ":" + messageId, caption));
+    }
+    
     @Override
     public void onButtonInteraction(ButtonInteractionEvent event) {
         String[] buttonId = event.getComponentId().split(":");
@@ -90,32 +145,64 @@ public class ChannelEventListener extends ListenerAdapter {
 
     private void chooseNextMember(ButtonInteractionEvent event, String messageId) {
         SessionData sessionData = messageIdToSessionDataMap.get(messageId);
-        MessageBuilder messageBuilder = sessionData.getMessageBuilder();
+        SessionData.UpdateResult updateResult = sessionData.update(getCurrentMembers(event.getGuild()));
+        
         MessageEditCallbackAction action = event.deferEdit();
-        if (!sessionData.isMemberListEmpty()) {
-            String member = sessionData.getNextMember();
-            action.setContent(messageBuilder + String.format("\n**%s**", member)).queue();
-            messageBuilder.appendNewLine(member);
-        } else {
+        action.setContent(updateResult.message);
+        if(updateResult.isFinal){
             action.setComponents();
-            action.setContent(messageBuilder.finish()).queue();
             messageIdToSessionDataMap.remove(messageId);
+        } else {
+            action.setComponents(getNextMemberButton("Следующий", messageId));
         }
+        action.queue();
     }
-
-    private boolean shuffleMembers(MessageReceivedEvent event) {
-        VoiceChannel channel = event.getGuild().getVoiceChannelById(MAIN_VOICE_CHANNEL_ID);
-        if (channel == null) {
+    
+    private boolean tryAddToQueue(
+        String message,
+        String command,
+        BiConsumer<SessionData, Member> addToQueue,
+        MessageReceivedEvent event
+    ){
+        if(!message.startsWith(command + " ")){
             return false;
         }
-        List<String> joinedMemberList = channel.getMembers().stream().map(Member::getEffectiveName).collect(Collectors.toList());
-        if (joinedMemberList.isEmpty()) {
+        List<String> memberParts = Arrays.stream(message.substring(command.length() + 1).split("[,;\n]"))
+            .map(String::trim)
+            .collect(Collectors.toList());
+        if(memberParts.isEmpty()){
             return false;
         }
-        Collections.shuffle(joinedMemberList);
-        SessionData sessionData = new SessionData(joinedMemberList, event.getMessageId());
-        messageIdToSessionDataMap.put(sessionData.getSessionId(), sessionData);
+        
+        Set<Member> currentMembers = getCurrentMembers(event.getGuild());
+        List<String> unknownMembers = new ArrayList<>();
+        for(String memberNamePart : memberParts){
+            Optional<Member> memberOpt = currentMembers.stream()
+                .filter(member -> member.getEffectiveName().contains(memberNamePart))
+                .findAny();
+            
+            if(!memberOpt.isPresent()){
+                unknownMembers.add(memberNamePart);
+                continue;
+            }
+            
+            messageIdToSessionDataMap.values().forEach(sessionData ->
+                addToQueue.accept(sessionData, memberOpt.get())
+            );
+        }
+        
+        if(!unknownMembers.isEmpty()){
+            event.getChannel().sendMessage("Я таких не знаю: " + String.join(", ", unknownMembers)).queue();
+        }
         return true;
+    }
+    
+    private Set<Member> getCurrentMembers(Guild guild){
+        VoiceChannel channel = guild.getVoiceChannelById(MAIN_VOICE_CHANNEL_ID);
+        if (channel == null) {
+            return new HashSet<>();
+        }
+        return new HashSet<>(channel.getMembers());
     }
 
     private void ping(MessageChannel channel) {
@@ -137,56 +224,6 @@ public class ChannelEventListener extends ListenerAdapter {
             System.exit(0);
         } else {
             channel.sendMessage("У вас недостаточно прав для выполнения этой команды").queue();
-        }
-    }
-
-    /**
-     * Действия на изменение статуса голосового канала
-     * Пока заточен только под наличие одного голосового канала
-     */
-    @Override
-    public void onGuildVoiceUpdate(GuildVoiceUpdateEvent event) {
-        AudioChannelUnion joinedChannel = event.getChannelJoined();
-        AudioChannelUnion leftChannel = event.getChannelLeft();
-        String memberName = event.getMember().getEffectiveName();
-        //Пользователь подключился к голосовому каналу
-        if (joinedChannel != null) {
-            addMemberToQueue(memberName);
-        }
-        //Пользователь покинул голосовой канал
-        if (leftChannel != null) {
-            removeMemberFromQueue(memberName);
-        }
-    }
-
-    private void removeMemberFromQueue(String memberName) {
-        LOGGER.info(String.format("Пользователь %s покинул канал", memberName));
-        for (Entry<String, SessionData> entry : messageIdToSessionDataMap.entrySet()) {
-            SessionData sessionData = entry.getValue();
-            sessionData.removeMember(memberName);
-            LOGGER.info(
-                String.format(
-                    "Seesion id = %s, members = %s",
-                    sessionData.getSessionId(),
-                    String.join(", ", sessionData.getMemberList())
-                )
-            );
-        }
-
-    }
-
-    private void addMemberToQueue(String memberName) {
-        LOGGER.info(String.format("Пользователь %s зашел в канал", memberName));
-        for (Entry<String, SessionData> entry : messageIdToSessionDataMap.entrySet()) {
-            SessionData sessionData = entry.getValue();
-            sessionData.addNewMember(memberName);
-            LOGGER.info(
-                String.format(
-                    "Seesion id = %s, members = %s",
-                    sessionData.getSessionId(),
-                    String.join(", ", sessionData.getMemberList())
-                )
-            );
         }
     }
 }
