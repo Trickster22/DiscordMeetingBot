@@ -6,6 +6,7 @@ import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 
 /**
  * Информация по сессии
@@ -26,11 +27,11 @@ public class SessionData {
     private final Set<Member> skipped = new HashSet<>();
     
     /**
-     * Очередь "приоритетных" людей - если она не пустая, то берет людей из нее
+     * Очередь "приоритетных" людей - если она не пустая, то в первую очередь берет людей из нее
      */
     private final Deque<Member> nextQueue = new ArrayDeque<>();
     /**
-     * Очередь людей, кто будет повторно выступать в конце
+     * Очередь людей, кто будет выступать в конце - начнет выбирать людей из нее, когда общий пул закончится
      */
     private final Deque<Member> lastQueue = new ArrayDeque<>();
 
@@ -61,13 +62,20 @@ public class SessionData {
             .orElseGet(() -> new UpdateResult(true));
     }
     
-    private Set<Member> filterSkipped(Set<Member> currentMembers){
-        return currentMembers.stream().filter(member -> !skipped.contains(member)).collect(Collectors.toSet());
+    private List<Member> getNotSpokenMembers(Set<Member> currentMembers){
+        Set<Member> alreadySpokenMembersSet = new HashSet<>(alreadySpokenMembers);
+        return currentMembers.stream()
+            .filter(member ->
+                Stream.of(alreadySpokenMembersSet, skipped, lastQueue)
+                    .noneMatch(set -> set.contains(member))
+                //nextQueue не учитываем, т.к. она первая перетечет в alreadySpokenMembersSet
+            )
+            .collect(Collectors.toList());
     }
     
     private boolean isNoQueueLeft(Set<Member> currentMembers){
         return nextQueue.isEmpty()
-            && new HashSet<>(alreadySpokenMembers).containsAll(filterSkipped(currentMembers))
+            && getNotSpokenMembers(currentMembers).isEmpty()
             && lastQueue.isEmpty();
     }
     
@@ -75,8 +83,7 @@ public class SessionData {
         if(!nextQueue.isEmpty()){
             return Optional.of(nextQueue.removeFirst());
         }
-        List<Member> notSpokenMembers = new ArrayList<>(filterSkipped(currentMembers));
-        notSpokenMembers.removeAll(alreadySpokenMembers);
+        List<Member> notSpokenMembers = getNotSpokenMembers(currentMembers);
         if(!notSpokenMembers.isEmpty()){
             int randomIndex = ThreadLocalRandom.current().nextInt(notSpokenMembers.size());
             return Optional.of(notSpokenMembers.get(randomIndex));
