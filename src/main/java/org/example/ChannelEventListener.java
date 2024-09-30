@@ -178,7 +178,7 @@ public class ChannelEventListener extends ListenerAdapter {
         List<String> unknownMembers = new ArrayList<>();
         for(String memberNamePart : memberParts){
             Optional<Member> memberOpt = currentMembers.stream()
-                .filter(member -> member.getEffectiveName().contains(memberNamePart))
+                .filter(member -> member.getEffectiveName().toLowerCase().contains(memberNamePart.toLowerCase()))
                 .findAny();
             
             if(!memberOpt.isPresent()){
